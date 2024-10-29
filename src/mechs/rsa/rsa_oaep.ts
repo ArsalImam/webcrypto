@@ -32,115 +32,11 @@ export class RsaOaepProvider extends core.RsaOaepProvider {
   }
 
   public async onEncrypt(algorithm: RsaOaepParams, key: RsaPublicKey, data: ArrayBuffer): Promise<ArrayBuffer> {
-    const internalKey = getCryptoKey(key) as RsaPublicKey;
-    const dataView = new Uint8Array(data);
-    const keySize = Math.ceil(internalKey.algorithm.modulusLength >> 3);
-    const hashSize = ShaCrypto.size(internalKey.algorithm.hash) >> 3;
-    const dataLength = dataView.byteLength;
-    const psLength = keySize - dataLength - 2 * hashSize - 2;
-
-    if (dataLength > keySize - 2 * hashSize - 2) {
-      throw new Error("Data too large");
-    }
-
-    const message = new Uint8Array(keySize);
-    const seed = message.subarray(1, hashSize + 1);
-    const dataBlock = message.subarray(hashSize + 1);
-
-    dataBlock.set(dataView, hashSize + psLength + 1);
-
-    const labelHash = crypto.createHash(internalKey.algorithm.hash.name.replace("-", ""))
-      .update(core.BufferSourceConverter.toUint8Array(algorithm.label || new Uint8Array(0)))
-      .digest();
-    dataBlock.set(labelHash, 0);
-    dataBlock[hashSize + psLength] = 1;
-
-    crypto.randomFillSync(seed);
-
-    const dataBlockMask = this.mgf1(internalKey.algorithm.hash, seed, dataBlock.length);
-    for (let i = 0; i < dataBlock.length; i++) {
-      dataBlock[i] ^= dataBlockMask[i];
-    }
-
-    const seedMask = this.mgf1(internalKey.algorithm.hash, dataBlock, seed.length);
-    for (let i = 0; i < seed.length; i++) {
-      seed[i] ^= seedMask[i];
-    }
-
-    if (!internalKey.pem) {
-      internalKey.pem = `-----BEGIN PUBLIC KEY-----\n${internalKey.data.toString("base64")}\n-----END PUBLIC KEY-----`;
-    }
-
-    const pkcs0 = crypto.publicEncrypt({
-      key: internalKey.pem,
-      padding: crypto.constants.RSA_NO_PADDING,
-    }, Buffer.from(message));
-
-    return new Uint8Array(pkcs0).buffer;
+    return RsaCrypto.encrypt(algorithm, key, new Uint8Array(data));
   }
 
   public async onDecrypt(algorithm: RsaOaepParams, key: RsaPrivateKey, data: ArrayBuffer): Promise<ArrayBuffer> {
-    const internalKey = getCryptoKey(key) as RsaPrivateKey;
-    const keySize = Math.ceil(internalKey.algorithm.modulusLength >> 3);
-    const hashSize = ShaCrypto.size(internalKey.algorithm.hash) >> 3;
-    const dataLength = data.byteLength;
-
-    if (dataLength !== keySize) {
-      throw new Error("Bad data");
-    }
-
-    if (!internalKey.pem) {
-      internalKey.pem = `-----BEGIN PRIVATE KEY-----\n${internalKey.data.toString("base64")}\n-----END PRIVATE KEY-----`;
-    }
-
-    let pkcs0 = crypto.privateDecrypt({
-      key: internalKey.pem,
-      padding: crypto.constants.RSA_NO_PADDING,
-    }, Buffer.from(data));
-    const z = pkcs0[0];
-    const seed = pkcs0.subarray(1, hashSize + 1);
-    const dataBlock = pkcs0.subarray(hashSize + 1);
-
-    if (z !== 0) {
-      throw new Error("Decryption failed");
-    }
-
-    const seedMask = this.mgf1(internalKey.algorithm.hash, dataBlock, seed.length);
-    for (let i = 0; i < seed.length; i++) {
-      seed[i] ^= seedMask[i];
-    }
-
-    const dataBlockMask = this.mgf1(internalKey.algorithm.hash, seed, dataBlock.length);
-    for (let i = 0; i < dataBlock.length; i++) {
-      dataBlock[i] ^= dataBlockMask[i];
-    }
-
-    const labelHash = crypto.createHash(internalKey.algorithm.hash.name.replace("-", ""))
-      .update(core.BufferSourceConverter.toUint8Array(algorithm.label || new Uint8Array(0)))
-      .digest();
-    for (let i = 0; i < hashSize; i++) {
-      if (labelHash[i] !== dataBlock[i]) {
-        throw new Error("Decryption failed");
-      }
-    }
-
-    let psEnd = hashSize;
-    for (; psEnd < dataBlock.length; psEnd++) {
-      const psz = dataBlock[psEnd];
-      if (psz === 1) {
-        break;
-      }
-      if (psz !== 0) {
-        throw new Error("Decryption failed");
-      }
-    }
-    if (psEnd === dataBlock.length) {
-      throw new Error("Decryption failed");
-    }
-
-    pkcs0 = dataBlock.subarray(psEnd + 1);
-
-    return new Uint8Array(pkcs0).buffer;
+    return RsaCrypto.decrypt(algorithm, key, new Uint8Array(data));
   }
 
   public async onExportKey(format: KeyFormat, key: CryptoKey): Promise<JsonWebKey | ArrayBuffer> {
